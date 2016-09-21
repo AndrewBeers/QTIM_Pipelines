@@ -2,9 +2,10 @@
     arrays generated from NIFTI images. It is based off of the greycomatrix,
     greycoprops and other GLCM utility code lifted straight from scikit-image.
     Goals for this program: generalize sci-kit's 2D GLCM to 3D, optimize 3D
-    GLCM calculation, figure out a way to aggreagte 2D calculations into a 
+    GLCM calculation, figure out a way to aggregate 2D calculations into a 
     useful measure within 3D images, and make a GLCM properties filtered image
-    from smaller GLCM calculations in subregions of the original image.
+    from smaller GLCM calculations in subregions of the original image. No matter
+    what, this function could use a lot of cleaning.
 """
 
 from __future__ import division
@@ -17,7 +18,7 @@ from math import sin, cos
 # pyximport.install()
 # import c_utils
 
-def glcm_2d_aggregate(image, distances, angles, levels=None, symmetric=False, normed=False, aggregate_axis=2, method="sum", masked=True, mask_value=0):
+def glcm_2d_aggregate(image, distances, angles, levels=None, symmetric=False, normed=False, aggregate_axis=-1, method="sum", masked=True, mask_value=0):
     
     assert_nD(image, 3)
 
@@ -45,6 +46,10 @@ def glcm_2d_aggregate(image, distances, angles, levels=None, symmetric=False, no
         raise ValueError("The maximum grayscale value in the image should be "
                          "smaller than the number of levels.")
 
+    if aggregate_axis == -1:
+        aggregate_axis = np.argmin(image.shape)
+        print '2-D GLCM aggregation axis chosen automatically at ' + str(aggregate_axis)
+
     nSlice = image.shape[aggregate_axis]
     result_GLCM = np.zeros((levels, levels, len(distances), len(angles)),
                  dtype=np.uint32, order='C')
@@ -66,7 +71,7 @@ def glcm_2d_aggregate(image, distances, angles, levels=None, symmetric=False, no
                 maximal[0] = test_maximal
                 maximal[1] = image_slice
 
-        result_GLCM = glcm_2d(maximal[1], distances, angles, levels, symmetric, normed)
+        result_GLCM = glcm_2d(maximal[1], distances, angles, levels, symmetric, normed, mask_value)
         return result_GLCM
 
     elif method == "sum" or method == "average":
@@ -74,11 +79,12 @@ def glcm_2d_aggregate(image, distances, angles, levels=None, symmetric=False, no
         for i in xrange(nSlice):
             
             # Full disclosure: I'm not entirely sure how this works, 
-            # but this code slices and image by an arbitrary axis
+            # but this code slices an image by an arbitrary axis
             # print image[[slice(None) if k != aggregate_axis else slice(i, i+1) for k in xrange(3)]]
             # image_slice = np.squeeze(image[[slice(None) if k != aggregate_axis else slice(i, i+1) for k in xrange(3)]])
             image_slice = image[:,:,i]
-            slice_GLCM = glcm_2d(image_slice, distances, angles, levels, symmetric, normed)
+            image_slice = np.squeeze(image[[slice(None) if k != aggregate_axis else slice(i, i+1) for k in xrange(3)]])
+            slice_GLCM = glcm_2d(image_slice, distances, angles, levels, symmetric, normed, mask_value)
             if method == "sum":
                 result_GLCM += slice_GLCM
             elif method == "average":
@@ -92,7 +98,7 @@ def glcm_2d_aggregate(image, distances, angles, levels=None, symmetric=False, no
 
 
 def glcm_2d(image, distances, angles, levels=None, symmetric=False,
-                 normed=False):
+                 normed=False, mask_value=0):
     """Calculate the grey-level co-occurrence matrix.
     A grey level co-occurrence matrix is a histogram of co-occurring
     greyscale values at a given offset over an image.
@@ -205,7 +211,7 @@ def glcm_2d(image, distances, angles, levels=None, symmetric=False,
                  dtype=np.uint32, order='C')
 
     # count co-occurences
-    _glcm_loop(image, distances, angles, levels, P)
+    _glcm_loop(image, distances, angles, levels, P, mask_value)
 
     # make each GLMC symmetric
     if symmetric:
@@ -221,7 +227,7 @@ def glcm_2d(image, distances, angles, levels=None, symmetric=False,
 
     return P
 
-def _glcm_loop(image, distances, angles, levels, out):
+def _glcm_loop(image, distances, angles, levels, out, mask_value):
     """Perform co-occurrence matrix accumulation.
     Parameters
     ----------
@@ -262,7 +268,8 @@ def _glcm_loop(image, distances, angles, levels, out):
                     if row >= 0 and row < rows and col >= 0 and col < cols:
                         j = image[row, col]
 
-                        if i >= 0 and i < levels and j >= 0 and j < levels:
+                        # make sure values are within the level parameters, and that offset is not in the mask
+                        if i >= 0 and i < levels and j >= 0 and j < levels and j != mask_value:
                             out[i, j, d_idx, a_idx] += 1
 
 def glcm_features_calc(P, props=['contrast', 'dissimilarity', 'homogeneity', 'ASM','energy','correlation'], distances=None, angles=None, out='list'):
@@ -340,6 +347,7 @@ def glcm_features_calc(P, props=['contrast', 'dissimilarity', 'homogeneity', 'AS
             raise ValueError('%s is an invalid property' % (current_prop))
 
         # compute current_property for each GLCM
+        # Note that the defintion for "Energy" varies.
         if current_prop == 'energy':
             asm = np.apply_over_axes(np.sum, (P ** 2), axes=(0, 1))[0, 0]
             results[:,:,p_idx] = np.sqrt(asm)
@@ -379,7 +387,7 @@ def glcm_features_calc(P, props=['contrast', 'dissimilarity', 'homogeneity', 'AS
     elif out == 'array':
         return results
 
-def glcm_features(image, distances=[1,2], angles=[0, np.pi/4, np.pi/2, 3*np.pi/4], props=['contrast', 'dissimilarity', 'homogeneity', 'ASM','energy','correlation'], levels=None, symmetric=False, normed=False, aggregate_axis=2, method="sum", masked=True, mask_value=0, out='list', return_level_array=False):
+def glcm_features(image, distances=[1,2], angles=[0, np.pi/4, np.pi/2, 3*np.pi/4], props=['contrast', 'dissimilarity', 'homogeneity', 'ASM','energy','correlation'], levels=None, symmetric=False, normed=False, aggregate_axis=-1, method="sum", masked=True, mask_value=0, out='list', return_level_array=False):
     glcm_array = glcm_2d_aggregate(image, distances, angles, levels, symmetric, normed, aggregate_axis, method, masked, mask_value)
     glcm_feats = glcm_features_calc(glcm_array, props, distances, angles, out)
     if return_level_array:

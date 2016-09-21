@@ -1,6 +1,9 @@
-"""This program is meant to serve as all-purpose utility script for this
+""" This program is meant to serve as all-purpose utility script for this
     pipeline. Now, and probably in the future, it is filled with code lifted
-    from scikit-image.
+    from scikit-image. I'm not sure whether it should be combined with nifti-util.
+    It may occur that non-image functions may be needed across programs, and that
+    this file could be a repository for them. However, the line is blurry between
+    image and non-image.
 """
 
 import numpy as np
